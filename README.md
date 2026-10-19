@@ -3,7 +3,7 @@
 Dynamics 365 / Power Platform 개발자용 로컬 MCP 서버 — 엔터티·폼·뷰 커스터마이즈, PCF, Power Automate, Power Pages(보안·접근성 점검 포함).
 
 - 설계서: [DESIGN.md](DESIGN.md)
-- 상태: 0단계(기반) 구현 완료 — 인증, 환경 프로필, 솔루션, plan/apply 파이프라인
+- 상태: 0단계(기반) + 1단계(엔터티·컬럼·관계·선택 항목·대체 키) 구현 완료 — 실제 환경 연결 테스트 전
 
 ## 설치
 
@@ -47,7 +47,7 @@ Claude Desktop (`claude_desktop_config.json`):
 
 첫 도구 호출 시 브라우저가 열려 로그인합니다. 토큰은 `%LOCALAPPDATA%\crmmcp\token-cache.bin`에 DPAPI로 암호화되어 저장됩니다.
 
-## 현재 도구 (0단계)
+## 현재 도구
 
 | 도구 | 설명 |
 |---|---|
@@ -58,3 +58,11 @@ Claude Desktop (`claude_desktop_config.json`):
 | `change_apply` / `change_list` / `change_discard` | 계획된 변경 실행·조회·취소 |
 | `publish_all` | 전체 게시 |
 | `dv_get` | 읽기 전용 Web API GET |
+| `meta_find` / `meta_describe` | 테이블 검색 / 테이블 상세(컬럼·관계·키·선택 값) |
+| `entity_plan` | 테이블 생성(기본 이름 컬럼 + 추가 컬럼) / 설정 수정 |
+| `column_plan` | 컬럼 생성(text, email, url, phone, memo, integer, decimal, float, money, date, datetime, boolean, choice, multichoice, file, image) / 라벨·필수·길이·감사 수정 |
+| `relationship_plan` | 1:N(조회 컬럼 생성) / N:N |
+| `optionset_plan` | 글로벌 선택 항목 생성, 옵션 추가, 라벨 변경 |
+| `key_plan` | 대체 키 |
+
+모든 `*_plan` 도구는 미리보기와 `changeToken`을 반환하며, `change_apply` 후 해당 테이블/선택 항목만 자동 게시됩니다. 수정 전 메타데이터는 `backups/`에 스냅샷으로 저장됩니다.

@@ -5,6 +5,7 @@ import { loadConfig } from "./config.js";
 import { Context } from "./context.js";
 import { log } from "./log.js";
 import { registerCoreTools } from "./tools/core.js";
+import { registerMetaTools } from "./tools/meta.js";
 
 async function main(): Promise<void> {
   const ctx = new Context(loadConfig());
@@ -20,6 +21,7 @@ async function main(): Promise<void> {
   );
 
   registerCoreTools(server, ctx);
+  registerMetaTools(server, ctx);
 
   await server.connect(new StdioServerTransport());
   log(`ready (default environment: ${ctx.config.defaultEnvironment})`);
