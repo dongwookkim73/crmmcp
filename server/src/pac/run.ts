@@ -1,5 +1,24 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { log } from "../log.js";
+
+/**
+ * Spawn a command. On Windows npm/pac are .cmd shims that need a shell, and the shell joins args
+ * unescaped, so quote any arg containing spaces or shell metacharacters.
+ */
+export function spawnCmd(cmd: string, args: string[], options: SpawnOptionsWithoutStdio = {}): ChildProcessWithoutNullStreams {
+  if (process.platform !== "win32") return spawn(cmd, args, options);
+  const quoted = args.map((a) => (/^[\w@%+=:,./\\-]+$/.test(a) ? a : `"${a.replace(/"/g, '\\"')}"`));
+  return spawn([cmd, ...quoted].join(" "), { ...options, shell: true, windowsHide: true });
+}
+
+/** Kill a process and its children (on Windows, child.kill() only stops the cmd.exe shell). */
+export function killTree(child: { pid?: number; kill: () => boolean }): void {
+  if (process.platform === "win32" && child.pid) {
+    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+  } else {
+    child.kill();
+  }
+}
 
 export interface PacResult {
   code: number;
@@ -14,7 +33,7 @@ export interface PacResult {
 export function pac(args: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<PacResult> {
   return new Promise((resolvePromise, reject) => {
     log("pac", args.join(" "));
-    const child = spawn("pac", args, { cwd: options.cwd, shell: process.platform === "win32", windowsHide: true });
+    const child = spawnCmd("pac", args, { cwd: options.cwd });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));

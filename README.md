@@ -3,7 +3,7 @@
 Dynamics 365 / Power Platform 개발자용 로컬 MCP 서버 — 엔터티·폼·뷰 커스터마이즈, PCF, Power Automate, Power Pages(보안·접근성 점검 포함).
 
 - 설계서: [DESIGN.md](DESIGN.md)
-- 상태: 0단계(기반) + 1단계(엔터티·컬럼·관계·선택 항목·대체 키) + 2단계(폼·뷰·웹 리소스) + 3단계(Power Pages·보안 감사) 구현 완료 — 실제 환경 연결 테스트 전
+- 상태: 0단계(기반) + 1단계(엔터티·컬럼·관계·선택 항목·대체 키) + 2단계(폼·뷰·웹 리소스) + 3단계(Power Pages·보안 감사) + 4단계(PCF) 구현 완료 — 실제 환경 연결 테스트 전
 
 ## 설치
 
@@ -76,6 +76,15 @@ Claude Desktop (`claude_desktop_config.json`):
 | `pages_local_list` / `pages_diff` / `pages_find` | 로컬 사이트 목록·변경사항(구성요소별, 변경 줄)·텍스트 검색 |
 | `pages_security_audit` | 정적 보안 감사 → `reports/pages-security-<site>-<날짜>.md` |
 | `pages_upload_plan` | 업로드 전 보안 감사 자동 실행, Critical 있으면 차단 → `pac pages upload` |
+| `pcf_list` | 로컬 PCF 프로젝트(`src/pcf/`) — 컨트롤 이름·버전·속성 |
+| `pcf_scaffold` | `pac pcf init`(field/dataset, React/HTML) + npm install + 호환 `@types/node` 고정 |
+| `pcf_build` | `npm run build` — 실패 시 파일·줄 단위 오류 |
+| `pcf_test_harness` | 로컬 테스트 하네스 시작/중지/상태 (`http://localhost:8181`) |
+| `pcf_push_plan` | 패치 버전 자동 증가 후 `pac pcf push`로 작업 솔루션에 배포 |
+| `pcf_package` | 배포용 솔루션 zip 빌드 (관리/비관리) |
+| `pcf_list_installed` | 환경에 등록된 코드 구성요소 |
+
+폼에 PCF를 붙일 때는 `form_patch_plan`의 `bindControl` 연산을 씁니다 (`unbindControl`로 제거). 매니페스트를 읽어 속성 이름·필수 속성을 검증하고, 첫 번째 bound 속성은 기본으로 해당 필드에 연결합니다.
 
 ### Power Pages 보안 감사 규칙
 

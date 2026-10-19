@@ -7,3 +7,8 @@ logs/
 node_modules/
 reports/
 src/pages/
+src/pcf/*/out/
+src/pcf/*/obj/
+src/pcf/*/solution/bin/
+src/pcf/*/solution/obj/
+src/pcf/*/generated/

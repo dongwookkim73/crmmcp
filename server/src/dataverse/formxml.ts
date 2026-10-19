@@ -212,13 +212,30 @@ export type FormOp =
       passContext?: boolean;
       parameters?: string;
     }
-  | { op: "removeEventHandler"; event: "onload" | "onsave" | "onchange"; field?: string; functionName: string };
+  | { op: "removeEventHandler"; event: "onload" | "onsave" | "onchange"; field?: string; functionName: string }
+  | {
+      op: "bindControl";
+      field: string;
+      control: string;
+      properties?: Record<string, { field?: string; value?: string }>;
+      formFactors?: ("web" | "tablet" | "phone")[];
+      replace?: boolean;
+    }
+  | { op: "unbindControl"; field: string };
+
+export interface ControlManifestInfo {
+  properties: { name: string; usage: string; ofType: string; required: boolean }[];
+}
 
 export interface PatchContext {
   lang: number;
   fields: Map<string, FieldInfo>;
   webResourceExists: (name: string) => Promise<boolean>;
+  /** Manifest of a registered code component (PCF), or undefined when not installed. */
+  controlManifest?: (name: string) => Promise<ControlManifestInfo | undefined>;
 }
+
+const FORM_FACTORS = { web: "0", tablet: "1", phone: "2" } as const;
 
 export async function applyOps(xml: string, ops: FormOp[], pc: PatchContext): Promise<{ xml: string; log: string[] }> {
   const doc = parseXml(xml);
@@ -407,6 +424,75 @@ export async function applyOps(xml: string, ops: FormOp[], pc: PatchContext): Pr
           log.push(`removed ${op.functionName} from ${op.event}`);
           break;
         }
+        case "bindControl": {
+          const manifest = await pc.controlManifest?.(op.control);
+          if (!manifest) throw new Error(`Code component "${op.control}" is not installed in this environment (push it first).`);
+          const control = children(fieldCell(doc, op.field), "control")[0];
+          let uid = control.getAttribute("uniqueid");
+          if (!uid) control.setAttribute("uniqueid", (uid = guid()));
+          const descs = child(form, "controlDescriptions", true)!;
+          const existing = children(descs, "controlDescription").find((d) => d.getAttribute("forControl") === uid);
+          if (existing && !op.replace) throw new Error(`"${op.field}" already has a custom control; pass replace: true.`);
+          if (existing) descs.removeChild(existing);
+
+          // Default: bind the first bound property to the field itself.
+          const props: Record<string, { field?: string; value?: string }> = { ...op.properties };
+          const firstBound = manifest.properties.find((p) => p.usage === "bound");
+          if (firstBound && !Object.values(props).some((v) => v.field === op.field) && !props[firstBound.name]) {
+            props[firstBound.name] = { field: op.field };
+          }
+          const unknown = Object.keys(props).filter((k) => !manifest.properties.some((p) => p.name === k));
+          if (unknown.length) throw new Error(`Unknown control propert${unknown.length > 1 ? "ies" : "y"}: ${unknown.join(", ")}. Available: ${manifest.properties.map((p) => p.name).join(", ")}`);
+          const missing = manifest.properties.filter((p) => p.required && !props[p.name]).map((p) => p.name);
+          if (missing.length) throw new Error(`Required control properties not set: ${missing.join(", ")}`);
+          for (const [name, v] of Object.entries(props)) {
+            if (v.field && !pc.fields.has(v.field)) throw new Error(`Property ${name}: column "${v.field}" does not exist.`);
+          }
+
+          const desc = doc.createElement("controlDescription");
+          desc.setAttribute("forControl", uid);
+          const def = doc.createElement("customControl");
+          def.setAttribute("id", control.getAttribute("classid") ?? "");
+          const defParams = doc.createElement("parameters");
+          const dfn = doc.createElement("datafieldname");
+          dfn.appendChild(doc.createTextNode(op.field));
+          defParams.appendChild(dfn);
+          def.appendChild(defParams);
+          desc.appendChild(def);
+          for (const ff of op.formFactors ?? ["web", "tablet", "phone"]) {
+            const cc = doc.createElement("customControl");
+            cc.setAttribute("name", op.control);
+            cc.setAttribute("formFactor", FORM_FACTORS[ff]);
+            const params = doc.createElement("parameters");
+            for (const [name, v] of Object.entries(props)) {
+              const meta = manifest.properties.find((p) => p.name === name)!;
+              const el = doc.createElement(name);
+              if (v.field) {
+                el.appendChild(doc.createTextNode(v.field));
+              } else {
+                el.setAttribute("type", meta.ofType);
+                el.setAttribute("static", "true");
+                el.appendChild(doc.createTextNode(v.value ?? ""));
+              }
+              params.appendChild(el);
+            }
+            cc.appendChild(params);
+            desc.appendChild(cc);
+          }
+          descs.appendChild(desc);
+          log.push(`bound ${op.control} to "${op.field}" (${(op.formFactors ?? ["web", "tablet", "phone"]).join("/")})`);
+          break;
+        }
+        case "unbindControl": {
+          const control = children(fieldCell(doc, op.field), "control")[0];
+          const uid = control.getAttribute("uniqueid");
+          const descs = child(form, "controlDescriptions");
+          const existing = uid && descs ? children(descs, "controlDescription").find((d) => d.getAttribute("forControl") === uid) : undefined;
+          if (!existing) throw new Error(`"${op.field}" has no custom control.`);
+          descs!.removeChild(existing);
+          log.push(`removed custom control from "${op.field}"`);
+          break;
+        }
       }
     } catch (err) {
       throw new Error(`${where}: ${(err as Error).message}`);
@@ -482,10 +568,17 @@ export function summarizeForm(xml: string) {
     const control = children(cell, "control")[0];
     if (!control) return undefined;
     const isSubgrid = control.getAttribute("classid")?.toUpperCase() === SUBGRID_CLASS_ID.toUpperCase();
+    const uid = control.getAttribute("uniqueid");
+    const custom = uid
+      ? all(doc, "controlDescription")
+          .find((d) => d.getAttribute("forControl") === uid)
+          ?.getElementsByTagName("customControl")
+      : undefined;
+    const customName = custom ? Array.from(custom).find((c) => c.getAttribute("name"))?.getAttribute("name") : undefined;
     const flags = [
       cell.getAttribute("visible") === "false" ? "hidden" : "",
       control.getAttribute("disabled") === "true" ? "read-only" : "",
-      children(control, "customControl").length || all(control, "customControl").length ? "custom-control" : "",
+      customName ? `control: ${customName}` : "",
     ].filter(Boolean);
     return isSubgrid
       ? `[subgrid] ${labelOf(cell) ?? control.getAttribute("id")} (${all(control, "TargetEntityType")[0]?.textContent ?? "?"})`

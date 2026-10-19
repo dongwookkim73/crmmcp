@@ -4,10 +4,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Context } from "../context.js";
 import { odataString } from "../dataverse/client.js";
-import { applyOps, emptyFormXml, regenerateIds, summarizeForm, xmlDiff, type FieldInfo, type FormOp } from "../dataverse/formxml.js";
+import { applyOps, emptyFormXml, parseXml, regenerateIds, summarizeForm, xmlDiff, type FieldInfo, type FormOp } from "../dataverse/formxml.js";
 import { baseLanguage, labelText, publish, requireEntity } from "../dataverse/metadata.js";
 import { buildFetchXml, buildLayoutXml, lookupsUsed, summarizeView, type LinkTarget } from "../dataverse/viewxml.js";
 import { registerChange, saveSnapshot } from "../pipeline/changes.js";
+import { parseProperties } from "../pcf/project.js";
 import { envParam, safe } from "./util.js";
 
 const FORM_TYPES = { main: 2, quickView: 6, quickCreate: 7, card: 11 } as const;
@@ -37,6 +38,15 @@ const FormOpSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("addLibrary"), library: z.string() }),
   z.object({ op: z.literal("addEventHandler"), event: z.enum(["onload", "onsave", "onchange"]), field: z.string().optional(), library: z.string(), functionName: z.string(), passContext: z.boolean().optional(), parameters: z.string().optional() }),
   z.object({ op: z.literal("removeEventHandler"), event: z.enum(["onload", "onsave", "onchange"]), field: z.string().optional(), functionName: z.string() }),
+  z.object({
+    op: z.literal("bindControl"),
+    field: z.string(),
+    control: z.string().describe("Code component name: namespace.ControlName"),
+    properties: z.record(z.string(), z.object({ field: z.string().optional(), value: z.string().optional() })).optional().describe("Manifest property -> { field } (bound) or { value } (static). The first bound property defaults to the field."),
+    formFactors: z.array(z.enum(["web", "tablet", "phone"])).optional(),
+    replace: z.boolean().optional(),
+  }),
+  z.object({ op: z.literal("unbindControl"), field: z.string() }),
 ]);
 
 const ViewColumnSchema = z.object({
@@ -90,7 +100,16 @@ function webResourceChecker(ctx: Context, env?: string) {
 }
 
 async function patchContext(ctx: Context, table: string, env?: string) {
-  return { lang: await baseLanguage(ctx, env), fields: await fieldInfo(ctx, table, env), webResourceExists: webResourceChecker(ctx, env) };
+  return {
+    lang: await baseLanguage(ctx, env),
+    fields: await fieldInfo(ctx, table, env),
+    webResourceExists: webResourceChecker(ctx, env),
+    controlManifest: async (name: string) => {
+      const res = await ctx.dv(env).get(`customcontrols?$filter=name eq ${odataString(name)}&$select=name,manifest`);
+      const manifest = res.value[0]?.manifest;
+      return manifest ? { properties: parseProperties(parseXml(manifest)) } : undefined;
+    },
+  };
 }
 
 async function getForm(ctx: Context, formId: string, env?: string) {
@@ -247,7 +266,7 @@ export function registerFormTools(server: McpServer, ctx: Context): void {
       title: "Plan: customize form",
       description:
         "Plan changes to an existing form as a list of operations: addTab, addSection, addField, removeField, moveField, setFieldProps, " +
-        "setTabProps, setSectionProps, addSubgrid, addLibrary, addEventHandler, removeEventHandler. Tabs/sections are matched by name or label. " +
+        "setTabProps, setSectionProps, addSubgrid, addLibrary, addEventHandler, removeEventHandler, bindControl (PCF), unbindControl. Tabs/sections are matched by name or label. " +
         "Returns a diff and changeToken; apply with change_apply (snapshot saved, table published).",
       inputSchema: { formId: id, operations: z.array(FormOpSchema).min(1), env: envParam },
     },
