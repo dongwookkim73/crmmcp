@@ -194,7 +194,7 @@ PAC CLI의 `pac pages download/upload`로 사이트를 **로컬 폴더(YAML + Li
 | 도구 | 동작 |
 |---|---|
 | `pages_list` | 환경의 사이트 목록, 데이터 모델(표준/향상), 사이트 URL |
-| `pages_download` | `pac pages download --modelVersion 2` → `src/pages/<site>`, 다운로드 직후 git 커밋(기준점) |
+| `pages_download` | `pac pages download --modelVersion Enhanced` → `src/pages/<site>`, 다운로드 직후 기준점(파일 해시 + 텍스트 사본)을 `backups/pages-baseline`에 저장. 사이트 내용은 비밀값이 섞일 수 있어 **git에 올리지 않음** (`.gitignore`) |
 | `pages_diff` | 로컬 변경사항 요약 (웹 페이지/템플릿/스니펫/사이트 설정/테이블 권한별) |
 | `pages_upload` (dev 전용) | 업로드 전 **R7 정적 보안 감사 자동 실행 → Critical 있으면 차단** → `pac pages upload` |
 | `pages_clear_cache` | 업로드 후 캐시 갱신 안내/실행 |

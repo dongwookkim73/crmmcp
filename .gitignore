@@ -1,8 +1,9 @@
-node_modules/
-dist/
-reports/
-logs/
-config.json
-.env
 *.pdf
+.env
 backups/
+config.json
+dist/
+logs/
+node_modules/
+reports/
+src/pages/

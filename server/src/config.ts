@@ -22,6 +22,13 @@ const ConfigSchema = z.object({
   defaultEnvironment: z.string(),
   environments: z.record(z.string(), EnvironmentSchema),
   limits: z.object({ maxRows: z.number().int().positive().default(200) }).default({ maxRows: 200 }),
+  pages: z
+    .object({
+      modelVersion: z.enum(["Enhanced", "Standard"]).default("Enhanced"),
+      /** Extra tables treated as sensitive by the security audit (added to the built-in list). */
+      sensitiveTables: z.array(z.string()).default([]),
+    })
+    .default({ modelVersion: "Enhanced", sensitiveTables: [] }),
 });
 
 export type EnvironmentConfig = z.infer<typeof EnvironmentSchema>;

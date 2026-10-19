@@ -15,5 +15,9 @@
   },
   "limits": {
     "maxRows": 200
+  },
+  "pages": {
+    "modelVersion": "Enhanced",
+    "sensitiveTables": []
   }
 }

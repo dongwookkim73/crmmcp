@@ -3,7 +3,7 @@
 Dynamics 365 / Power Platform 개발자용 로컬 MCP 서버 — 엔터티·폼·뷰 커스터마이즈, PCF, Power Automate, Power Pages(보안·접근성 점검 포함).
 
 - 설계서: [DESIGN.md](DESIGN.md)
-- 상태: 0단계(기반) + 1단계(엔터티·컬럼·관계·선택 항목·대체 키) + 2단계(폼·뷰·웹 리소스) 구현 완료 — 실제 환경 연결 테스트 전
+- 상태: 0단계(기반) + 1단계(엔터티·컬럼·관계·선택 항목·대체 키) + 2단계(폼·뷰·웹 리소스) + 3단계(Power Pages·보안 감사) 구현 완료 — 실제 환경 연결 테스트 전
 
 ## 설치
 
@@ -71,5 +71,31 @@ Claude Desktop (`claude_desktop_config.json`):
 | `view_create_plan` / `view_update_plan` | 뷰 생성·수정 (관련 테이블 컬럼은 `lookup.column` 표기) |
 | `webresource_list` / `webresource_get` / `webresource_upsert_plan` | 웹 리소스 조회 / 로컬 파일 업로드(생성·수정) |
 | `snapshot_restore_plan` | `backups/` 스냅샷으로 폼·뷰·웹 리소스 되돌리기 |
+| `pages_list` | 환경의 Power Pages 사이트(향상/표준 데이터 모델)와 로컬 다운로드 여부 |
+| `pages_download` | `pac pages download`로 `src/pages/`에 내려받고 변경 비교용 기준점 저장 |
+| `pages_local_list` / `pages_diff` / `pages_find` | 로컬 사이트 목록·변경사항(구성요소별, 변경 줄)·텍스트 검색 |
+| `pages_security_audit` | 정적 보안 감사 → `reports/pages-security-<site>-<날짜>.md` |
+| `pages_upload_plan` | 업로드 전 보안 감사 자동 실행, Critical 있으면 차단 → `pac pages upload` |
+
+### Power Pages 보안 감사 규칙
+
+| 규칙 | 심각도 | 내용 |
+|---|---|---|
+| PP-TP-01 | Critical/High | 익명 웹 역할 + Global 범위 읽기 (민감 테이블이면 Critical) |
+| PP-TP-02 | Critical | 익명 웹 역할에 생성/수정/삭제/추가 권한 |
+| PP-TP-03 | High (공개 가입 시 Critical) | 인증 사용자 + Global 범위 수정/삭제 |
+| PP-TP-04 / 05 | Medium | 웹 역할 없는 권한 / 부모 없는 Parent 범위 |
+| PP-API-01 | Critical | Web API 활성 + 익명 읽기 권한 |
+| PP-API-02 | High/Medium | `Webapi/<table>/fields` 미설정 또는 `*` |
+| PP-AUTH-01 | Medium | 공개 가입(OpenRegistrationEnabled) |
+| PP-HDR-01~03 | Medium/Low | CSP 없음·약함, CORS `*`, 클릭재킹 보호 없음 |
+| PP-SEC-01 / 02 | High | 코드의 하드코딩된 키·토큰 / 사이트 설정의 평문 비밀값 |
+| PP-FORM-01 / PP-LIST-01 | High/Medium | 테이블 권한을 적용하지 않는 기본 폼 / 리스트 |
+| PP-PAGE-01 | Medium | 관리용으로 보이는 페이지에 페이지 권한 없음 |
+| PP-LIQ-01 / 02, PP-JS-01 | Info/Medium/Low | Liquid FetchXML, 이스케이프 없는 요청 파라미터 출력, URL 값의 innerHTML |
+
+민감 테이블 기본 목록은 `server/src/pages/audit.ts`에 있고, `config.json`의 `pages.sensitiveTables`로 추가할 수 있습니다. 다운로드한 사이트(`src/pages/`)와 리포트(`reports/`)는 비밀값이 섞일 수 있어 git에 올리지 않습니다.
+
+> Power Pages 도구는 PAC CLI 인증 프로필이 필요합니다. 처음 한 번 터미널에서 `pac auth create --environment <환경 URL>`을 실행하세요.
 
 모든 `*_plan` 도구는 미리보기와 `changeToken`을 반환하며, `change_apply` 후 변경된 구성요소만 자동 게시됩니다. 수정 전 상태는 `backups/`에 스냅샷으로 저장됩니다.
