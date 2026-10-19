@@ -1,251 +1,308 @@
-# Dynamics 365 로컬 MCP 서버 설계서
+# crmmcp — Dynamics 365 / Power Platform 개발자용 로컬 MCP 서버 설계서 (v2)
 
-- 작성일: 2026-10-15
-- 대상: Dynamics 365 Online (Dataverse, `*.crm3.dynamics.com`), Field Service 포함
-- 용도: (1) 리포트 작성 (2) 일반 사용자 지원 / 트러블슈팅
-- 실행 형태: 로컬 PC에서 stdio MCP 서버로 실행 → Claude Desktop / Claude Code에서 사용
+- 작성일: 2026-10-18 (v1: 2026-10-15, 리포트/지원 중심 → v2: 커스터마이징·개발 중심으로 재설계)
+- 사용자: 본인 1명, 로컬 PC (Claude Code / Claude Desktop)
+- 대상: Dynamics 365 Online (Dataverse, `*.crm3.dynamics.com`), Power Pages, Power Automate
 
----
+## 0. 요구사항
 
-## 1. 리서치 요약: Microsoft 공식 MCP 서버가 제공하는 기능
-
-### 1.1 Dataverse MCP Server (GA, `/api/mcp`)
-
-| 도구 | 기능 | 비고 |
+| # | 작업 | 우선순위 |
 |---|---|---|
-| `search` | 테이블 스키마·스킬을 키워드로 검색 (메타데이터) | |
-| `describe` | 테이블/레코드/스키마/앱 상세 | 구 `describe_table`, `list_tables`, `fetch` 대체 |
-| `read_query` | Dataverse SQL `SELECT` 실행 | **JOIN, GROUP BY, DISTINCT, HAVING, 서브쿼리, OFFSET 미지원**, 대량 결과 잘림 보고 있음 |
-| `search_data` | Dataverse Search(정형+비정형) | Dataverse search 활성화 필요, **호출당 10 크레딧** |
-| `create_record` / `update_record` / `delete_record` | 레코드 CRUD | delete는 사용자 승인 후 |
-| `create_table` / `update_table` / `delete_table` | 스키마 변경 | |
-| `upsert_skill` / `delete_skill` | Dataverse 스킬(플레이북) | |
-| `init_file_upload` / `commit_file_upload` / `file_download` | 파일 컬럼 SAS URL | |
-
-- 보안: Dataverse 보안 역할·행 수준 보안 그대로 적용
-- 과금: 2025-12-15부터 Copilot Studio 외부 에이전트 사용 시 Copilot Credit 과금 (D365 Premium / M365 Copilot USL 보유 시 면제)
-- 연결: `npx @microsoft/dataverse mcp <orgUrl>` 로컬 프록시, 테넌트 관리자 동의 + PPAC에서 허용 클라이언트 등록 필요
-
-### 1.2 Dynamics 365 Sales MCP Server
-- 리드/계정/경쟁사 리서치, 아웃리치 이메일 초안, 영업기회 건강도·리스크·스테이크홀더 등 **생성형 AI 도구 ~20개**
-- Agent 365 게이트웨이 경유, **Claude Desktop 미지원** 명시
-
-### 1.3 Dynamics 365 Customer Experience MCP Server for Service (GA 2026-07)
-- 90+ 도구: 케이스 관리(조회/검색/수정/할당/해결, SLA), 고객 정보·타임라인, 지식 문서, 이메일 보조, 활동/노트, 다음 최선 조치, 데이터 검색, 관리 도구
-- 도구별로 Dataverse 권한(privilege)에 매핑 → 권한 없으면 도구 자체가 노출되지 않음
-- Agent 365 Tooling Gateway 경유
-
-### 1.4 Field Service
-- **전용 MCP 서버 없음.** Dataverse MCP의 범용 조회로만 접근 가능
-
-### 1.5 설계에 주는 시사점
-1. 공식 서버의 핵심 약점은 **`read_query`의 SQL 제약**(JOIN·집계 불가) → 리포트 용도로 부족. 우리 서버는 **FetchXML**(조인·집계·그룹핑 지원)을 1급 시민으로 둔다.
-2. 공식 서버에는 **사용자 지원용 진단 도구가 없다** (역할/팀/권한 확인, 감사 이력, 플러그인 오류). → 우리 서버의 차별점.
-3. Field Service 특화 도구가 없다 → 작업지시·예약·리소스 일정 도구를 만든다.
-4. 공식 서버의 좋은 패턴은 차용: 권한은 Dataverse에 위임, 파괴적 작업은 명시적 승인, 메타데이터 검색→상세→조회의 3단계 흐름.
+| R1 | 엔터티(테이블)·컬럼·관계·옵션셋 생성/수정 | 필수 |
+| R2 | 폼·뷰 생성 | 필수 |
+| R3 | 폼 커스터마이즈 (탭/섹션/필드, 스크립트, 컨트롤) | 필수 |
+| R4 | PCF 컨트롤 개발 | 필수 |
+| R5 | Power Automate 클라우드 흐름 생성/수정 | 필수 |
+| R6 | Power Pages 커스터마이즈 | 필수 |
+| R7 | Power Pages 보안 점검 | 필수 |
+| R8 | 접근성 점검 | 선택 |
 
 ---
 
-## 2. 설계 목표 / 비목표
+## 1. 리서치 요약 — 이미 있는 것들
 
-**목표**
-- 사용자 본인 계정(위임 권한)으로 Dataverse Web API 직접 호출 → **Copilot Credit 과금 없음**, 본인 권한 범위만 접근
-- 기본 **읽기 전용**, 쓰기는 설정으로 명시적 활성화 + 2단계 확인
-- 리포트: 조인·집계 쿼리, 대량 결과는 로컬 파일(CSV/XLSX)로 저장하고 요약만 AI에 전달
-- 지원: "왜 안 보여요 / 왜 안 돼요"를 도구 몇 번으로 진단
-- 나중에 원격(HTTP) 배포로 확장 가능한 구조
+### 1.1 Microsoft 공식 도구 현황
 
-**비목표 (1차)**
-- 스키마 변경(테이블 생성/삭제), 레코드 삭제
-- 생성형 AI 도구(요약·이메일 초안) — Claude가 직접 수행하므로 불필요
-- 다중 테넌트, 서비스 계정 무인 실행
-
----
-
-## 3. 기술 스택
-
-| 항목 | 선택 | 이유 |
-|---|---|---|
-| 언어/런타임 | **TypeScript + Node.js** | 이 PC에 Node v25 설치됨, Python 없음. 단일 실행파일 패키징도 용이 |
-| MCP SDK | `@modelcontextprotocol/sdk` | 공식 SDK, stdio·Streamable HTTP 모두 지원 |
-| 스키마 검증 | `zod` | 도구 입력 스키마 정의 |
-| 인증 | `@azure/msal-node` + `@azure/msal-node-extensions` | 대화형 로그인/디바이스 코드, Windows DPAPI 암호화 토큰 캐시 |
-| HTTP | Node 내장 `fetch` | 의존성 최소화 |
-| 파일 출력 | `exceljs` (XLSX), 내장 CSV 작성기 | 리포트 내보내기 |
-
----
-
-## 4. 아키텍처
-
-```
-Claude Desktop / Claude Code
-        │  stdio (JSON-RPC)
-        ▼
-┌──────────────────────────────────────────────┐
-│ dynamics-mcp (Node)                          │
-│  ├─ tools/      도구 정의 (core/support/fs/report/write)
-│  ├─ guard/      읽기전용·테이블 허용목록·행 상한·PII 마스킹
-│  ├─ dataverse/  Web API 클라이언트 (OData, FetchXML, 함수/액션)
-│  │               └ 재시도(429 Retry-After), 페이징, 포맷값
-│  ├─ metadata/   EntityDefinitions 캐시 (디스크, TTL 24h)
-│  ├─ auth/       MSAL 공개 클라이언트 + 암호화 토큰 캐시
-│  └─ audit/      로컬 호출 로그 (JSONL)
-└──────────────────────────────────────────────┘
-        │  HTTPS, Bearer (사용자 위임 토큰)
-        ▼
-https://<org>.crm3.dynamics.com/api/data/v9.2/
-```
-
-### 4.1 인증
-- Entra ID **앱 등록 1개** (공개 클라이언트, 리디렉션 `http://localhost`)
-  - API 권한: `Dynamics CRM` → `user_impersonation` (위임)
-  - 관리자 동의가 필요할 수 있음 (테넌트 정책에 따라)
-- 흐름: 최초 1회 브라우저 대화형 로그인 → 이후 리프레시 토큰으로 무인 갱신
-  - 브라우저를 못 띄우는 환경이면 디바이스 코드 흐름으로 폴백
-- 스코프: `https://<org>.crm3.dynamics.com/.default`
-- 토큰 캐시: `%LOCALAPPDATA%\dynamics-mcp\token-cache.bin` (DPAPI 암호화)
-- 비밀번호·클라이언트 시크릿은 저장하지 않음
-- 프로토타입 단계에서 앱 등록이 늦어지면, Microsoft 문서 샘플용 공개 클라이언트 ID 사용 가능 여부를 테넌트 정책으로 확인 (운영에선 자체 앱 등록 사용)
-
-### 4.2 다중 환경
-- `config.json`의 `environments` 목록 (예: `covfs-dev`, `covfs-prod`)
-- 모든 도구에 선택적 `env` 파라미터, 기본값은 `defaultEnvironment`
-- 환경별로 `readOnly`, `allowedTables` 개별 설정 → **prod는 항상 읽기 전용** 권장
-
----
-
-## 5. 도구(Tool) 설계
-
-명명 규칙: `<영역>_<동사>`. 모든 응답은 `{ summary, data, truncated, nextPageToken? }` 형태의 간결한 JSON. 옵션셋·룩업은 `@OData.Community.Display.V1.FormattedValue`로 사람이 읽는 값을 함께 반환.
-
-### 5.1 Core — 탐색과 조회 (Phase 1)
-
-| 도구 | 입력 | 동작 | 공식 서버 대응 |
+| 도구 | 형태 | 커버 범위 | 우리에게 주는 의미 |
 |---|---|---|---|
-| `dv_whoami` | env? | WhoAmI + 사용자 이름, 사업부, 환경 URL/버전 | – |
-| `dv_find_tables` | keyword | EntityDefinitions에서 논리명/표시명/설명 검색 (캐시) | `search` |
-| `dv_describe_table` | table, includeRelationships? | 컬럼(타입, 필수, 옵션셋 값), 기본키/기본 이름 컬럼, 관계 | `describe` |
-| `dv_query` | table, select[], filter?, orderBy?, expand?, top? | OData 조회, 자동 페이징(상한까지) | `read_query` |
-| `dv_fetchxml` | fetchXml | FetchXML 실행 — **조인(link-entity), 집계, group by 지원** | (없음) |
-| `dv_get_record` | table, id, select? | 단일 레코드 + 포맷값 | `describe` |
-| `dv_count` | table, filter? | 빠른 건수 (`$count` / `RetrieveTotalRecordCount`) | – |
-| `dv_search` | text, tables? | Dataverse Search (활성화된 경우만 노출) | `search_data` |
+| **Dataverse MCP Server** (`/api/mcp`) | 원격 MCP | 레코드 CRUD, `read_query`(SQL 제약), 테이블 생성/수정/삭제 | 폼·뷰·흐름·Pages 미지원. 외부 클라이언트는 Copilot Credit 과금 |
+| **microsoft/Dataverse-skills** | Claude Code 플러그인 (스킬) | `dv-metadata`(테이블·컬럼·관계·**폼·뷰**), `dv-solution`, `dv-security`, `dv-admin` 등 | 기능은 R1·R2와 겹침. 단 **Dataverse MCP + Python SDK + Dataverse CLI에 의존** |
+| **microsoft/power-platform-skills** | Claude Code 플러그인 마켓 | `pcf`(스캐폴드→게이트→PAC 배포→검증, 프리뷰), `model-apps`(/app-builder), `power-pages`(**코드 사이트/SPA** 생성·배포, `scan-site` 보안 스캔), `power-automate`(**FlowAgent MCP** 경유) | PCF·Pages·흐름 노하우 참고 가치 큼. 흐름은 Microsoft MCP 의존 |
+| **PAC CLI** (설치됨: 1.39.3) | CLI | `pac solution`, `pac pcf`, `pac pages download/upload`, `pac auth` | R4·R6의 실제 빌드/배포 엔진으로 그대로 사용 |
+| Dataverse Web API | REST | 메타데이터(EntityDefinitions), `systemform`, `savedquery`, `workflow`(category=5 흐름), `webresource`, Power Pages 테이블(`powerpagecomponent` 등) | **우리 서버의 기반** |
 
-**설계 포인트**
-- `dv_query`의 `filter`는 OData 문법 그대로 받되, 테이블/컬럼명은 메타데이터 캐시로 검증 → 오타 시 "혹시 이 컬럼?" 후보 제안
-- 결과 행 상한 기본 200 (설정 가능). 넘으면 `truncated: true` + "report_export를 쓰세요" 안내
-- 긴 텍스트 필드는 500자로 자름
+### 1.2 결론: 왜 직접 만드나
+1. Microsoft 쪽은 **흐름(FlowAgent MCP)·Dataverse(Dataverse MCP)가 Microsoft MCP 의존** → "가능하면 Microsoft MCP 미사용" 원칙과 충돌, 일부는 과금.
+2. 기존 Power Pages 플러그인은 **코드 사이트(SPA) 중심**. 기존(Liquid/웹 템플릿) 사이트의 커스터마이즈·**정적 보안 감사**는 부족.
+3. 폼 XML 편집, 흐름 정의 편집처럼 **망가뜨리기 쉬운 작업에 백업·diff·롤백**을 일관되게 강제하는 도구가 없음.
+4. 단, 바퀴를 다시 만들지는 않는다: **빌드·배포는 PAC CLI**, 코드 편집은 **Claude Code 기본 기능**, 노하우는 **스킬 문서**로 둔다. MCP 서버는 "Dataverse에 안전하게 쓰는 일"에 집중.
 
-### 5.2 Support — 사용자 지원/진단 (Phase 1)
+---
 
-| 도구 | 입력 | 동작 |
+## 2. 아키텍처 — 3계층 분담
+
+```
+┌─────────────────────────── Claude Code (로컬) ───────────────────────────┐
+│                                                                           │
+│  ① 스킬 (.claude/skills/*)        ② crmmcp MCP 서버 (stdio)   ③ 기본 도구  │
+│  - 작업 절차·체크리스트·XML 패턴    - Dataverse 메타데이터/폼/뷰  - 파일 편집 │
+│  - "엔터티 만들 때 순서"            - 흐름 정의 CRUD             - npm, git │
+│  - "PCF 개발 루프"                  - Pages 다운로드/업로드/감사  - 터미널   │
+│  - "Pages 보안 체크리스트"          - 백업·diff·게시·롤백          │        │
+│                                     - PAC CLI 래핑                 │        │
+└──────────────────────────────────────┬────────────────────────────┴───────┘
+                                       │ HTTPS (사용자 위임 토큰) / pac
+                                       ▼
+                 Dataverse Web API  ·  PAC CLI  ·  Power Pages 사이트(라이브 URL)
+```
+
+| 계층 | 담당 | 예 |
 |---|---|---|
-| `support_user_profile` | user (이메일/이름/ID) | 활성 여부, 액세스 모드, 사업부, **직접 역할 + 팀 경유 역할**, 소속 팀, 최근 로그인(가능 시) |
-| `support_check_access` | user, table, recordId | `RetrievePrincipalAccess`로 해당 사용자의 레코드 권한(Read/Write/Assign/Share…) + 소유자/공유 여부 → "왜 안 보이는지" 설명 |
-| `support_compare_users` | userA, userB | 두 사용자의 역할·팀·사업부 차이 (되는 사람 vs 안 되는 사람) |
-| `support_record_history` | table, recordId, top? | `RetrieveRecordChangeHistory` — 누가 언제 어떤 필드를 바꿨는지 (감사 활성화 필요) |
-| `support_recent_failures` | sinceHours?, user? | 실패한 시스템 작업(`asyncoperation`, statuscode=31), 플러그인 추적 로그(`plugintracelog`), 실패한 Power Automate 흐름 실행 요약 |
-| `support_solution_info` | name? | 설치된 솔루션/버전 (예: Maptaskr `mtrcore_*` 버전 확인) |
+| ① 스킬 | **무엇을 어떤 순서로** — 지식·절차 | 폼 XML 구조, 흐름 정의 스키마 예시, 보안 규칙 근거 |
+| ② MCP | **Dataverse에 쓰는 모든 것** — 검증·백업·게시를 강제 | `entity_create`, `form_patch`, `flow_update` |
+| ③ 기본 도구 | **로컬 코드** — PCF TypeScript, Liquid/CSS/JS 편집, 빌드 | PCF `index.ts` 수정, `npm run build` |
 
-### 5.3 Field Service (Phase 1)
+---
 
-| 도구 | 입력 | 동작 |
-|---|---|---|
-| `fs_work_orders` | status?, territory?, account?, from?, to?, top? | 작업지시 목록 (`msdyn_workorder`) — 상태·우선순위·유형·서비스 계정·지역 |
-| `fs_work_order_detail` | workOrder (번호 또는 ID) | 작업지시 + 인시던트, 제품/서비스, 서비스 작업, **예약(bookings)**, 최근 노트 한 번에 |
-| `fs_resource_schedule` | resource, from, to | 리소스(기술자)의 예약 일정 (`bookableresourcebooking`) + 상태 |
-| `fs_unscheduled` | territory?, priority? | 미배정 작업지시 / 요구사항(`msdyn_resourcerequirement`) |
+## 3. 핵심 원칙: 안전한 변경 파이프라인
 
-### 5.4 Report (Phase 1)
+모든 쓰기 도구는 같은 파이프라인을 탄다.
 
-| 도구 | 입력 | 동작 |
-|---|---|---|
-| `report_export` | fetchXml 또는 query, format (csv/xlsx), fileName? | 전체 페이지를 받아 `./reports/` 에 저장. **AI에는 파일 경로 + 건수 + 컬럼 + 상위 10행만 반환** (토큰 절약·데이터 노출 최소화) |
-| `report_aggregate` | table, groupBy[], measures[] (count/sum/avg/min/max), filter?, dateGrouping? (day/week/month/quarter/year) | 구조화된 입력 → 집계 FetchXML 생성·실행. AI가 FetchXML을 직접 짜다 틀리는 걸 줄임 |
+```
+ plan(미리보기) ──► 사용자 확인 ──► apply ──► publish ──► verify
+    │                                 │
+    └─ 현재 상태 스냅샷 → backups/     └─ 실패 시 스냅샷으로 rollback
+```
 
-### 5.5 Write (Phase 2, 기본 비활성)
+| 규칙 | 내용 |
+|---|---|
+| **환경 프로필** | `dev`만 쓰기 허용. `test`/`prod`는 읽기 전용 (쓰기 도구가 아예 등록되지 않음). 프로필은 `config.json` |
+| **솔루션 강제** | 모든 생성/수정은 지정한 **비관리 솔루션**에 포함 (`MSCRM.SolutionUniqueName` 헤더 또는 `AddSolutionComponent`). 기본 솔루션에 흩어지지 않음 |
+| **퍼블리셔 접두사** | 새 스키마 이름에 퍼블리셔 접두사 자동 적용·검증 (예: `cov_`) |
+| **2단계 쓰기** | `*_plan` → diff + `changeToken`(10분 유효) 반환, `*_apply`는 토큰으로만 실행 |
+| **스냅샷** | 변경 전 원본(폼 XML, 뷰 FetchXML/LayoutXML, 흐름 clientdata, Pages 파일)을 `backups/<날짜>/<컴포넌트>`에 저장 → 이 폴더는 git으로 이력 관리 |
+| **게시** | 변경된 컴포넌트만 `PublishXml`로 게시 (전체 게시는 별도 도구) |
+| **삭제 없음 (1차)** | 테이블·컬럼·폼·흐름 삭제 도구는 만들지 않음. 필요 시 UI에서 |
+| **감사 로그** | `logs/audit-YYYYMMDD.jsonl` — 도구, 대상, 솔루션, 결과 |
+
+---
+
+## 4. 도구 설계
+
+명명 규칙 `<영역>_<동사>`. 모든 도구에 선택적 `env`(기본 `dev`). 쓰기 도구는 `plan`/`apply` 쌍.
+
+### 4.0 공통 / 솔루션
 
 | 도구 | 동작 |
 |---|---|
-| `dv_prepare_change` | 생성/수정 내용을 받아 **검증 + 변경 전/후 diff 미리보기**만 반환, 10분 유효한 `changeToken` 발급 |
-| `dv_apply_change` | `changeToken`으로만 실행 (미리보기 없이 쓰기 불가) |
+| `env_info` | 현재 환경, 사용자, 기본 솔루션·퍼블리셔 접두사, 읽기전용 여부 |
+| `solution_list` / `solution_components` | 비관리 솔루션 목록, 솔루션 내 구성요소 |
+| `solution_set_active` | 이후 변경이 들어갈 작업 솔루션 지정 |
+| `solution_export` | 솔루션 내보내기 → `pac solution unpack`으로 `src/solutions/<name>`에 풀어 git diff 가능하게 (백업 겸 소스 관리) |
+| `publish` | 지정 컴포넌트 게시 / `publish_all` |
+| `rollback` | `backups/`의 스냅샷으로 되돌리기 (폼·뷰·흐름·웹리소스) |
 
-- `readOnly: false`인 환경에서만 노출
-- 삭제·스키마 변경 도구는 만들지 않음
-- 모든 쓰기는 감사 로그에 기록
+### 4.1 R1 — 엔터티·컬럼·관계
 
-### 5.6 MCP Prompts / Resources
+| 도구 | 동작 | API |
+|---|---|---|
+| `meta_find` | 테이블/컬럼 검색 (캐시) | `EntityDefinitions` |
+| `meta_describe` | 테이블 상세: 컬럼(타입·필수·옵션값), 관계, 키, 폼·뷰 목록 | 〃 |
+| `entity_plan` / `entity_apply` | 테이블 생성·수정 (표시명, 복수형, 소유권 User/Org, 활동/노트 활성화, 감사, 기본 이름 컬럼) | `POST/PUT EntityDefinitions` |
+| `column_plan` / `column_apply` | 컬럼 생성·수정 — 문자열/메모/정수/소수/통화/날짜/불린/선택(로컬·글로벌)/다중선택/조회/파일/이미지, 수식·롤업은 정의 문자열 | `…/Attributes` |
+| `relationship_plan` / `relationship_apply` | 1:N(조회 컬럼 포함), N:N, 연계 동작(cascade) | `RelationshipDefinitions` |
+| `optionset_plan` / `optionset_apply` | 글로벌 선택 집합 생성, 옵션 추가/라벨 변경 | `GlobalOptionSetDefinitions`, `InsertOptionValue` |
+| `key_plan` / `key_apply` | 대체 키 | `…/Keys` |
 
-**Prompts** (슬래시 메뉴에서 선택하는 재사용 시나리오)
-- `troubleshoot-visibility`: "사용자 X가 레코드 Y를 못 봄" → profile → check_access → compare_users 순서 안내
-- `monthly-report`: 테이블·기간 받아 report_aggregate → report_export → 요약
-- `fs-daily-briefing`: 오늘 미배정/지연 작업지시, 기술자별 일정
+- 입력은 사람 친화 스펙 (예: `{ "name": "Inspection Date", "type": "date", "required": true }`) → 서버가 메타데이터 JSON(`@odata.type`, Label 구조 등)으로 변환
+- 라벨 수정 시 `MSCRM.MergeLabels: true`로 다른 언어 라벨 보존
+- `plan` 단계에서 이름 충돌, 접두사, 예약어, 최대 길이, 타입 변경 불가 여부 검증
 
-**Resources**
-- `dataverse://{env}/tables` — 테이블 목록 (캐시)
-- `dataverse://{env}/tables/{name}` — 테이블 스키마
+### 4.2 R2 — 폼·뷰 생성
+
+| 도구 | 동작 | API |
+|---|---|---|
+| `form_list` / `form_get` | 테이블의 폼 목록, 폼 구조를 **읽기 쉬운 트리**(탭→섹션→필드)와 원본 XML로 반환 | `systemforms` |
+| `form_create_plan` / `_apply` | 새 폼 (Main/Quick Create/Quick View/Card), 레이아웃 스펙 또는 기존 폼 복제 | `POST systemforms` (formxml) |
+| `view_list` / `view_get` | 뷰 목록, 컬럼·정렬·필터를 구조화해서 반환 | `savedqueries` |
+| `view_create_plan` / `_apply` | 새 뷰: 컬럼(너비), 정렬, 필터, 연결 테이블 컬럼 | `POST savedqueries` (fetchxml + layoutxml 자동 생성) |
+| `view_update_plan` / `_apply` | 컬럼 추가/제거/순서/너비, 필터·정렬 변경 | `PATCH savedqueries` |
+
+### 4.3 R3 — 폼 커스터마이즈
+
+폼 XML을 AI가 통째로 다시 쓰지 않게 **패치 연산** 방식으로 설계 (실수 범위 최소화).
+
+| 도구 | 동작 |
+|---|---|
+| `form_patch_plan` / `_apply` | 연산 배열을 받아 폼 XML에 적용 → diff 미리보기 |
+| `webresource_list` / `webresource_get` | JS/HTML/CSS/이미지 웹 리소스 조회 |
+| `webresource_upsert_plan` / `_apply` | 로컬 파일 → 웹 리소스 생성/수정 (폼 스크립트, 아이콘) |
+
+`form_patch` 연산 종류:
+
+| 연산 | 예 |
+|---|---|
+| `addTab` / `addSection` | `{ op:"addSection", tab:"General", label:"Inspection", columns:2 }` |
+| `addField` / `removeField` / `moveField` | `{ op:"addField", section:"Inspection", field:"cov_inspectiondate", after:"cov_status" }` |
+| `setFieldProps` | 라벨, 필수(폼 레벨), 읽기전용, 숨김, 라벨 표시 여부 |
+| `setTabProps` / `setSectionProps` | 표시/숨김, 라벨, 기본 펼침 |
+| `addSubgrid` | 관련 테이블·뷰·행 수 |
+| `addLibrary` / `addEventHandler` | 폼 OnLoad/OnSave, 필드 OnChange에 웹 리소스 함수 연결 (`executionContext` 전달) |
+| `bindControl` | 필드에 **PCF 컨트롤** 바인딩 (웹/폰/태블릿, 속성 매핑) — R4와 연결 |
+| `setHeaderFields` | 헤더 필드 |
+
+- `plan` 단계 검증: 필드가 테이블에 존재하는지, 이미 폼에 있는지, 라이브러리가 존재하는지, ID 중복
+- 비즈니스 규칙은 1차 범위 밖 (UI 권장)
+
+### 4.4 R4 — PCF 개발
+
+PCF는 대부분 로컬 코드 작업이라 Claude Code 기본 기능 + PAC CLI가 주역. MCP는 **반복 작업 단축과 Dataverse 연결**만 담당.
+
+| 도구 | 동작 |
+|---|---|
+| `pcf_scaffold` | `pac pcf init` (field/dataset, React/표준) + `npm install`, 폴더 `src/pcf/<name>` |
+| `pcf_build` | `npm run build` + 오류 요약 |
+| `pcf_test_harness` | `npm start watch` 백그라운드 실행, 로컬 테스트 하네스 URL 반환 |
+| `pcf_push` (dev 전용) | `pac pcf push --publisher-prefix <prefix>` → 임시 솔루션 대신 작업 솔루션에 추가 옵션 |
+| `pcf_package` | `pac solution init/add-reference` + `dotnet build` → 배포용 솔루션 zip |
+| `pcf_list_installed` | 환경에 등록된 사용자 정의 컨트롤 목록 (`customcontrols`) |
+| (연계) `form_patch: bindControl` | 만든 컨트롤을 폼 필드에 바인딩 |
+
+스킬 `pcf-dev-loop`: 매니페스트 속성 설계 → `updateView`/`getOutputs` 패턴 → 하네스 테스트 → push → 폼 바인딩 → 확인 체크리스트.
+
+### 4.5 R5 — Power Automate (솔루션 인식 클라우드 흐름)
+
+Dataverse `workflow` 테이블(`category = 5`)의 `clientdata`(흐름 정의 JSON 문자열)를 직접 다룬다. **솔루션 안의 흐름만** 지원 (My Flows는 API 미지원).
+
+| 도구 | 동작 |
+|---|---|
+| `flow_list` | 솔루션/전체 흐름: 이름, 상태(켜짐/꺼짐), 트리거 종류, 소유자, 수정일 |
+| `flow_get` | 정의를 **트리거·액션 트리 요약** + 원본 JSON으로 반환, 연결 참조 목록 |
+| `flow_create_plan` / `_apply` | 정의 JSON + 연결 참조로 새 흐름 생성 (기본 **꺼짐** 상태로 생성) |
+| `flow_update_plan` / `_apply` | 정의 수정 — 원본 스냅샷 + 액션 단위 diff |
+| `flow_set_state` | 켜기/끄기 (`statecode`) |
+| `connref_list` | 연결 참조(`connectionreference`)와 연결 상태 — 새 흐름에 재사용 |
+| `flow_runs` | 최근 실행 이력·실패 액션 (Dataverse `flowrun` 테이블 사용 가능 시. 불가하면 1차 범위 외로 표시) |
+
+- `plan` 검증: JSON 스키마(`$schema`, `triggers`, `actions`), `runAfter` 참조 무결성, 사용 커넥터에 대응하는 연결 참조 존재 여부
+- 스킬 `flow-patterns`: Dataverse 트리거(행 추가/수정), 조건, Apply to each, 오류 처리 범위(Scope + runAfter Failed) 예시 정의
+
+### 4.6 R6 — Power Pages 커스터마이즈
+
+PAC CLI의 `pac pages download/upload`로 사이트를 **로컬 폴더(YAML + Liquid/HTML/CSS/JS)**로 내려받아 Claude Code가 파일을 직접 편집하는 방식.
+
+| 도구 | 동작 |
+|---|---|
+| `pages_list` | 환경의 사이트 목록, 데이터 모델(표준/향상), 사이트 URL |
+| `pages_download` | `pac pages download --modelVersion 2` → `src/pages/<site>`, 다운로드 직후 git 커밋(기준점) |
+| `pages_diff` | 로컬 변경사항 요약 (웹 페이지/템플릿/스니펫/사이트 설정/테이블 권한별) |
+| `pages_upload` (dev 전용) | 업로드 전 **R7 정적 보안 감사 자동 실행 → Critical 있으면 차단** → `pac pages upload` |
+| `pages_clear_cache` | 업로드 후 캐시 갱신 안내/실행 |
+| `pages_find` | 사이트 구성요소 검색 (예: "Contact 테이블을 쓰는 곳") |
+
+- 코드 사이트(SPA)는 Microsoft `power-pages` 플러그인과 겹치므로 1차 범위에서는 `pac pages upload-code-site` 래핑만
+
+### 4.7 R7 — Power Pages 보안 점검
+
+두 단계: **정적 감사**(다운로드한 사이트 파일 분석, 안전·빠름) + **라이브 점검**(실제 URL, 본인 사이트에만).
+
+#### 정적 감사 `pages_security_audit` 규칙
+
+| ID | 심각도 | 점검 |
+|---|---|---|
+| PP-TP-01 | Critical | **익명(Anonymous Users) 웹 역할**에 Global 범위 테이블 권한 |
+| PP-TP-02 | Critical | 익명 역할에 Create/Write/Delete/Append 권한 |
+| PP-TP-03 | High | 인증 사용자에 Global 범위 + Write/Delete |
+| PP-TP-04 | Medium | 테이블 권한이 어떤 웹 역할에도 연결 안 됨 / 사용 안 되는 권한 |
+| PP-API-01 | Critical | `Webapi/<table>/enabled = true` 이면서 익명 읽기 권한 존재 |
+| PP-API-02 | High | `Webapi/<table>/fields = *` (모든 컬럼 노출) |
+| PP-API-03 | Medium | 민감 컬럼(이메일·전화·주민번호류·금액 등 설정 가능 목록) Web API 노출 |
+| PP-LIQ-01 | High | Liquid `{% fetchxml %}`에서 테이블 권한 우회 가능 패턴 / 민감 테이블 조회 |
+| PP-LIQ-02 | Medium | 사용자 입력(`request.params`)을 이스케이프 없이 출력 (XSS) |
+| PP-FORM-01 | High | 익명 접근 가능 페이지의 기본/다단계 폼이 Insert/Edit 모드 + 민감 컬럼 |
+| PP-LIST-01 | Medium | 리스트(엔터티 목록)가 민감 컬럼 표시 또는 테이블 권한 비활성 |
+| PP-PAGE-01 | Medium | 관리/내부용으로 보이는 페이지에 페이지 권한(웹 역할 제한) 없음 |
+| PP-AUTH-01 | Medium | `Authentication/Registration/OpenRegistrationEnabled = true` (공개 가입) |
+| PP-AUTH-02 | Info | Entra ID 외 외부 ID 공급자 사용 |
+| PP-HDR-01 | Medium | `HTTP/Content-Security-Policy` 미설정 / `unsafe-inline`·`*` 포함 |
+| PP-HDR-02 | Medium | `HTTP/Access-Control-Allow-Origin = *` |
+| PP-HDR-03 | Low | `X-Frame-Options`/`frame-ancestors` 미설정 |
+| PP-FILE-01 | Medium | 첨부 업로드 허용 확장자/크기 제한 없음 |
+| PP-SEC-01 | High | 템플릿·JS·사이트 설정에 하드코딩된 키/토큰/비밀번호 패턴 |
+
+출력: 심각도별 표 + 근거 파일 경로·라인 + 수정 방법. `reports/pages-security-<site>-<날짜>.md`
+
+#### 라이브 점검 `pages_security_live` (본인 소유 사이트, 확인 후 실행)
+- 응답 헤더 실검사 (CSP, HSTS, X-Frame-Options, 쿠키 플래그)
+- **로그인 없이** `/_api/<table>` 호출해 실제 익명 노출 여부 확인 (읽기 GET만)
+- WAF 활성 여부(가능 시), 사이트 가시성(공개/비공개)
+- Microsoft 공식 **딥 스캔**(Power Pages 보안 스캔)은 API 인터페이스가 공개 문서로 확인되지 않아 1차는 "디자인 스튜디오에서 실행" 안내 + 결과 병합은 추후
+
+### 4.8 R8 — 접근성 점검 (선택)
+
+| 도구 | 동작 |
+|---|---|
+| `a11y_scan` | Playwright(헤드리스 Chromium) + **axe-core**로 지정 URL들 검사 → WCAG 2.1 AA 위반 목록(규칙, 영향도, 요소 셀렉터, 수정 가이드) |
+| `a11y_static` | 다운로드한 Pages 템플릿 정적 검사: `img` alt 누락, 폼 라벨 연결, 헤딩 순서, 대비가 의심되는 CSS 색 조합 |
+| 출력 | `reports/a11y-<site>-<날짜>.md` (+ 원본 JSON) |
+
+- 인증이 필요한 페이지는 1차에서 제외 (공개 페이지만)
+- 모델 기반 앱 폼은 Microsoft가 접근성을 관리하므로 대상 외
+
+### 4.9 (부록) v1의 조회/지원 도구
+v1 설계의 `dv_query`, `dv_fetchxml`, `support_user_profile`, `support_check_access` 등은 **읽기 전용 보조 모듈**로 유지 (커스터마이징 중 데이터 확인·권한 디버깅에 유용). 구현 우선순위는 낮춤.
 
 ---
 
-## 6. 안전장치 (Guard)
+## 5. 스킬 (`.claude/skills/`)
 
-| 항목 | 기본값 | 설명 |
+| 스킬 | 내용 |
+|---|---|
+| `crm-customize` | 엔터티→컬럼→관계→폼→뷰→게시 순서, 명명 규칙, 솔루션·접두사 규칙 |
+| `formxml-patterns` | 폼 XML 구조, 컨트롤 classid, 이벤트 핸들러, 흔한 오류 |
+| `pcf-dev-loop` | PCF 개발 루프 (4.4) |
+| `flow-patterns` | 흐름 정의 JSON 예시·검증 규칙 (4.5) |
+| `pages-customize` | Pages 폴더 구조, Liquid 패턴, 업로드 절차 |
+| `pages-security` | 4.7 규칙의 근거와 수정 방법 |
+
+---
+
+## 6. 기술 스택 / 환경
+
+| 항목 | 선택 | 현재 PC |
 |---|---|---|
-| 읽기 전용 | `true` | 쓰기 도구 자체를 등록하지 않음 |
-| 테이블 허용/차단 목록 | 차단: `systemuser`의 민감 컬럼 등 | 환경별 설정 |
-| 행 상한 | 200 (응답), 50,000 (export) | 초과 시 잘림 표시 |
-| 컬럼 마스킹 | 옵션 | 이메일·전화 등 지정 컬럼을 `***`로 마스킹해서 AI에 전달 |
-| 요청 제한 | 429 시 `Retry-After` 준수, 최대 3회 | Dataverse 서비스 보호 한도(사용자당 5분 6,000요청 등) 대응 |
-| 타임아웃 | 30초/요청 | |
-| 감사 로그 | `logs/audit-YYYYMMDD.jsonl` | 도구명, 파라미터, 건수, 소요시간 (데이터 본문 제외) |
-
-> 권한의 최종 판단은 Dataverse 보안 역할에 맡긴다. 이 서버의 Guard는 **AI의 실수를 줄이는 보조 장치**이지 보안 경계가 아니다.
+| 런타임 | TypeScript + Node.js | Node v25.8.1 ✅ |
+| MCP | `@modelcontextprotocol/sdk` (stdio) | |
+| 인증 (Web API) | `@azure/msal-node` 대화형 로그인 + DPAPI 토큰 캐시 | Entra 앱 등록 필요 |
+| 인증 (PAC) | `pac auth create --environment <url>` (별도 1회 로그인) | |
+| PAC CLI | 빌드·배포 엔진 | 1.39.3 ✅ (업데이트 권장) |
+| .NET SDK | PCF 솔루션 패키징 | 8.0.426 ✅ |
+| XML | `fast-xml-parser` 또는 `@xmldom/xmldom` (폼/뷰 XML 패치, 원본 서식 보존) | |
+| 접근성 | `playwright` + `@axe-core/playwright` | 설치 필요 |
+| 버전 관리 | git — `backups/`, `src/solutions/`, `src/pages/`, `src/pcf/` | git 2.53 ✅ |
 
 ---
 
 ## 7. 프로젝트 구조
 
 ```
-DynamicsMCP/
-├─ package.json
-├─ tsconfig.json
-├─ config.example.json        # 환경 URL, 테넌트/클라이언트 ID, 가드 설정
-├─ src/
-│  ├─ index.ts                # 서버 부트스트랩 (stdio)
-│  ├─ config.ts
-│  ├─ auth/msal.ts
-│  ├─ dataverse/client.ts     # fetch 래퍼: 재시도, 페이징, 포맷값 헤더
-│  ├─ dataverse/fetchxml.ts   # 집계 FetchXML 빌더
-│  ├─ metadata/cache.ts
-│  ├─ guard/index.ts
-│  ├─ audit/log.ts
-│  └─ tools/
-│     ├─ core.ts
-│     ├─ support.ts
-│     ├─ fieldservice.ts
-│     ├─ report.ts
-│     └─ write.ts
-├─ reports/                   # export 출력 (gitignore)
-└─ logs/                      # 감사 로그 (gitignore)
-```
-
-### 7.1 Claude 연결 설정
-
-Claude Code:
-```bash
-claude mcp add dynamics -- node C:/Projects/DynamicsMCP/dist/index.js
-```
-
-Claude Desktop (`claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "dynamics": {
-      "command": "node",
-      "args": ["C:/Projects/DynamicsMCP/dist/index.js"]
-    }
-  }
-}
+crmmcp/
+├─ DESIGN.md
+├─ config.example.json          # 환경 프로필(dev/test/prod), 솔루션, 접두사, 민감 컬럼 목록
+├─ .claude/skills/              # 5장 스킬
+├─ server/                      # MCP 서버
+│  ├─ src/index.ts
+│  ├─ src/auth/  src/dataverse/  src/pac/
+│  ├─ src/pipeline/             # plan/apply, changeToken, snapshot, publish, rollback
+│  ├─ src/tools/                # solution, meta, form, view, webresource, pcf, flow, pages, a11y
+│  └─ src/audit/pages-rules/    # R7 규칙 (규칙당 1파일)
+├─ src/                         # 작업 산출물 (git 관리)
+│  ├─ solutions/<name>/         # unpack된 솔루션
+│  ├─ pcf/<control>/
+│  └─ pages/<site>/
+├─ backups/                     # 변경 전 스냅샷
+├─ reports/                     # 보안·접근성 리포트
+└─ logs/
 ```
 
 ---
@@ -254,42 +311,30 @@ Claude Desktop (`claude_desktop_config.json`):
 
 | 단계 | 내용 | 완료 기준 |
 |---|---|---|
-| **0. 준비** | Entra 앱 등록, `config.json` 작성 | 브라우저 로그인 후 `dv_whoami` 성공 |
-| **1. Core** | dv_* 도구, 메타데이터 캐시, 가드, 감사 로그 | "계정 테이블 설명해줘", "이번 달 생성된 케이스 수" 동작 |
-| **2. Support + FS** | support_*, fs_* 도구 | 실제 사용자 1명으로 권한 진단 시나리오 통과 |
-| **3. Report** | report_export, report_aggregate, prompts | 월간 리포트 XLSX 생성 |
-| **4. Write (선택)** | prepare/apply 2단계 쓰기 | dev 환경에서만 검증 |
-| **5. 원격화 (선택)** | Streamable HTTP + OAuth, Azure 배포 | claude.ai 웹 커스텀 커넥터로 연결 |
+| **0. 기반** | 인증, 환경 프로필, 솔루션 지정, plan/apply 파이프라인, 스냅샷, 감사 로그, `env_info` | dev에서 `env_info`, `solution_list` 동작 |
+| **1. R1** | meta/entity/column/relationship/optionset | 테스트 솔루션에 테이블+컬럼 5종+1:N 관계 생성·게시 |
+| **2. R2·R3** | form/view/webresource, form_patch 연산 | 폼에 섹션·필드·OnChange 스크립트 추가, 뷰 생성 |
+| **3. R6·R7** | pages download/diff/upload, 정적 보안 감사 | 실제 dev 사이트 감사 리포트 생성, Critical 시 업로드 차단 확인 |
+| **4. R4** | pcf 도구 + bindControl | 샘플 PCF를 폼 필드에 바인딩해 동작 |
+| **5. R5** | flow 도구 | 솔루션 흐름 조회·수정·켜기/끄기, 신규 생성(꺼짐) |
+| **6. R8·라이브 점검** | a11y_scan, pages_security_live | 공개 페이지 접근성 리포트 |
+
+> 우선순위 근거: 사용 빈도·위험도가 높은 R1~R3를 먼저, Pages(R6·R7)는 감사가 독립적으로 가치가 커서 다음, PCF·흐름은 PAC/기존 도구로 당장 일부 대체 가능하므로 뒤로.
 
 ---
 
-## 9. 공식 Dataverse MCP와 비교
-
-| | 공식 Dataverse MCP | 이 서버 |
-|---|---|---|
-| 비용 | Copilot Credit (Premium/M365 Copilot 면제) | 없음 (일반 Web API) |
-| 관리자 작업 | 테넌트 동의 + PPAC 환경별 MCP 활성화·클라이언트 허용 | 앱 등록 1개 |
-| 조인/집계 | ✗ (`read_query` SQL 제약) | ✓ FetchXML |
-| 사용자 지원 진단 | ✗ | ✓ 역할/팀/권한/감사/실패 작업 |
-| Field Service 특화 | ✗ | ✓ |
-| 대용량 결과 | AI 컨텍스트로 전달 (잘림) | 로컬 파일로 저장 후 요약 |
-| 스키마 변경 | ✓ | ✗ (의도적 제외) |
-| 유지보수 | Microsoft | 직접 |
-
----
-
-## 10. 열린 질문
-1. Entra 앱 등록을 직접 할 수 있는지, IT 요청이 필요한지
-2. 대상 환경: `covfs-dev` 외에 prod/test URL
-3. 감사(Audit) 활성화 여부 — `support_record_history` 사용 가능성
-4. Field Service에서 자주 보는 리포트/질문 예시 3~5개 (도구 입력 설계에 반영)
-5. 데이터 반출 정책 확인 결과 (마스킹 기본값 결정)
+## 9. 열린 질문
+1. Entra 앱 등록 가능 여부 (Web API용 공개 클라이언트, `Dynamics CRM / user_impersonation`)
+2. dev 환경 외 test/prod URL, 그리고 작업용 비관리 솔루션 이름·퍼블리셔 접두사
+3. Power Pages 사이트: 표준/향상 데이터 모델 여부, 사이트 URL
+4. 흐름 실행 이력(`flowrun`) 테이블이 환경에 있는지 — `flow_runs` 범위 결정
+5. 민감 컬럼 기준 (보안 감사 PP-API-03 등에 사용)
 
 ## 참고 자료
-- [Connect to Dataverse with MCP](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp)
-- [Dataverse MCP FAQ](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-faq)
-- [Dataverse MCP preview tools](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-preview-tools)
-- [Dataverse MCP with non-Microsoft clients](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-other-clients)
-- [Dynamics 365 Sales MCP overview](https://learn.microsoft.com/en-us/dynamics365/sales/model-context-protocol-sales-overview)
+- [Dataverse MCP](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp) · [FAQ](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-faq) · [non-Microsoft clients](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-other-clients)
+- [microsoft/Dataverse-skills](https://github.com/microsoft/dataverse-skills) · [microsoft/power-platform-skills](https://github.com/microsoft/power-platform-skills)
+- [Power Pages plugin for Claude Code](https://learn.microsoft.com/en-us/power-pages/configure/create-code-site-using-claude-code)
+- [Power Pages & PAC CLI](https://learn.microsoft.com/en-us/power-pages/configure/power-platform-cli) · [CLI tutorial](https://learn.microsoft.com/en-us/power-pages/configure/power-platform-cli-tutorial)
+- [Power Pages admin center security](https://learn.microsoft.com/en-us/power-pages/admin/admin-center-security)
+- [Manage flows with code (Dataverse Web API)](https://learn.microsoft.com/en-us/power-automate/manage-flows-with-code)
 - [Customer Service MCP tools overview](https://learn.microsoft.com/en-us/dynamics365/customer-service/develop/mcp-tools-overview)
-- [dv-query skill (read_query SQL 제약, 2차 출처)](https://mcpservers.org/agent-skills/microsoft/dv-query)
