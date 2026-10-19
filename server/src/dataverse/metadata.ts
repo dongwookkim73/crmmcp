@@ -148,14 +148,20 @@ export async function getAttribute(ctx: Context, entity: string, attribute: stri
   }
 }
 
-/** Publish specific tables and/or global choices. */
-export async function publish(ctx: Context, env: string | undefined, items: { entities?: string[]; optionSets?: string[] }) {
+/** Publish specific tables (incl. their forms and views), global choices and/or web resources. */
+export async function publish(
+  ctx: Context,
+  env: string | undefined,
+  items: { entities?: string[]; optionSets?: string[]; webResourceIds?: string[] },
+) {
   const entities = (items.entities ?? []).map((e) => `<entity>${e}</entity>`).join("");
   const optionSets = (items.optionSets ?? []).map((o) => `<optionset>${o}</optionset>`).join("");
+  const webResources = (items.webResourceIds ?? []).map((w) => `<webresource>{${w.replace(/[{}]/g, "")}}</webresource>`).join("");
   const xml =
     "<importexportxml>" +
     (entities ? `<entities>${entities}</entities>` : "") +
     (optionSets ? `<optionsets>${optionSets}</optionsets>` : "") +
+    (webResources ? `<webresources>${webResources}</webresources>` : "") +
     "</importexportxml>";
   await ctx.dv(env).post("PublishXml", { ParameterXml: xml });
 }
