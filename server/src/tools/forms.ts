@@ -561,7 +561,7 @@ export function registerFormTools(server: McpServer, ctx: Context): void {
     "snapshot_restore_plan",
     {
       title: "Plan: restore snapshot",
-      description: "Plan restoring a form, view or web resource from a snapshot file in backups/ (paths are returned by change_apply). Returns a changeToken.",
+      description: "Plan restoring a form, view, web resource or cloud flow definition from a snapshot file in backups/ (paths are returned by change_apply). Returns a changeToken.",
       inputSchema: { file: z.string(), env: envParam },
     },
     safe(async ({ file, env }) => {
@@ -573,6 +573,7 @@ export function registerFormTools(server: McpServer, ctx: Context): void {
         systemform: { path: `systemforms(${snap.id})`, publish: () => publish(ctx, env, { entities: [snap.table!] }) },
         savedquery: { path: `savedqueries(${snap.id})`, publish: () => publish(ctx, env, { entities: [snap.table!] }) },
         webresource: { path: `webresourceset(${snap.id})`, publish: () => publish(ctx, env, { webResourceIds: [snap.id] }) },
+        workflow: { path: `workflows(${snap.id})`, publish: async () => undefined },
       };
       const target = targets[snap.kind];
       if (!target) throw new Error(`Snapshot kind "${snap.kind}" is not restorable.`);

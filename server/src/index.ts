@@ -9,6 +9,7 @@ import { registerMetaTools } from "./tools/meta.js";
 import { registerFormTools } from "./tools/forms.js";
 import { registerPagesTools } from "./tools/pages.js";
 import { registerPcfTools } from "./tools/pcf.js";
+import { registerFlowTools } from "./tools/flows.js";
 
 async function main(): Promise<void> {
   const ctx = new Context(loadConfig());
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
   registerFormTools(server, ctx);
   registerPagesTools(server, ctx);
   registerPcfTools(server, ctx);
+  registerFlowTools(server, ctx);
 
   await server.connect(new StdioServerTransport());
   log(`ready (default environment: ${ctx.config.defaultEnvironment})`);

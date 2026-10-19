@@ -3,7 +3,7 @@
 Dynamics 365 / Power Platform 개발자용 로컬 MCP 서버 — 엔터티·폼·뷰 커스터마이즈, PCF, Power Automate, Power Pages(보안·접근성 점검 포함).
 
 - 설계서: [DESIGN.md](DESIGN.md)
-- 상태: 0단계(기반) + 1단계(엔터티·컬럼·관계·선택 항목·대체 키) + 2단계(폼·뷰·웹 리소스) + 3단계(Power Pages·보안 감사) + 4단계(PCF) 구현 완료 — 실제 환경 연결 테스트 전
+- 상태: 0단계(기반) + 1단계(엔터티·컬럼·관계·선택 항목·대체 키) + 2단계(폼·뷰·웹 리소스) + 3단계(Power Pages·보안 감사) + 4단계(PCF) + 5단계(Power Automate) 구현 완료 — 실제 환경 연결 테스트 전
 
 ## 설치
 
@@ -83,6 +83,15 @@ Claude Desktop (`claude_desktop_config.json`):
 | `pcf_push_plan` | 패치 버전 자동 증가 후 `pac pcf push`로 작업 솔루션에 배포 |
 | `pcf_package` | 배포용 솔루션 zip 빌드 (관리/비관리) |
 | `pcf_list_installed` | 환경에 등록된 코드 구성요소 |
+
+| `flow_list` / `flow_get` | 솔루션 클라우드 흐름 목록(상태·트리거) / 트리거·액션 개요(분기·runAfter), 연결 참조, 검증 경고 |
+| `connref_list` | 연결 참조(커넥터, 연결 설정 여부) |
+| `flow_create_plan` | 정의(`{ triggers, actions }`) + 연결 매핑으로 새 흐름 생성 — **꺼진 상태로** 생성 |
+| `flow_update_plan` | 정의·연결·이름 변경 — 액션 단위 추가/삭제/변경 표시, 켜진 흐름은 끄고 수정 후 다시 켬 |
+| `flow_set_state_plan` | 흐름 켜기/끄기 (연결 없는 연결 참조가 있으면 켜기 거부) |
+| `flow_runs` | 최근 실행 이력 (환경에 Dataverse 실행 기록이 있을 때) |
+
+흐름 정의는 저장 전에 검증합니다: 트리거 1개, `runAfter`가 같은 범위의 액션을 가리키는지, 순환, 잘못된 상태값, 커넥터 액션의 `operationId`, 액션이 쓰는 연결이 연결 참조에 있는지. 오류 처리(runAfter Failed)가 없으면 경고합니다. 흐름 정의 스냅샷도 `snapshot_restore_plan`으로 되돌릴 수 있습니다.
 
 폼에 PCF를 붙일 때는 `form_patch_plan`의 `bindControl` 연산을 씁니다 (`unbindControl`로 제거). 매니페스트를 읽어 속성 이름·필수 속성을 검증하고, 첫 번째 bound 속성은 기본으로 해당 필드에 연결합니다.
 
