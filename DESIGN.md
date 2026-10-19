@@ -79,7 +79,7 @@
 | **환경 프로필** | `dev`만 쓰기 허용. `test`/`prod`는 읽기 전용 (쓰기 도구가 아예 등록되지 않음). 프로필은 `config.json` |
 | **솔루션 강제** | 모든 생성/수정은 지정한 **비관리 솔루션**에 포함 (`MSCRM.SolutionUniqueName` 헤더 또는 `AddSolutionComponent`). 기본 솔루션에 흩어지지 않음 |
 | **퍼블리셔 접두사** | 새 스키마 이름에 퍼블리셔 접두사 자동 적용·검증 (예: `cov_`) |
-| **2단계 쓰기** | `*_plan` → diff + `changeToken`(10분 유효) 반환, `*_apply`는 토큰으로만 실행 |
+| **2단계 쓰기** | `*_plan` → diff + `changeToken`(10분 유효) 반환, 공통 `change_apply`가 토큰으로만 실행 (`change_list`, `change_discard`로 관리) |
 | **스냅샷** | 변경 전 원본(폼 XML, 뷰 FetchXML/LayoutXML, 흐름 clientdata, Pages 파일)을 `backups/<날짜>/<컴포넌트>`에 저장 → 이 폴더는 git으로 이력 관리 |
 | **게시** | 변경된 컴포넌트만 `PublishXml`로 게시 (전체 게시는 별도 도구) |
 | **삭제 없음 (1차)** | 테이블·컬럼·폼·흐름 삭제 도구는 만들지 않음. 필요 시 UI에서 |

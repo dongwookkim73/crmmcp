@@ -1,0 +1,19 @@
+{
+  "tenantId": "<Entra tenant ID>",
+  "clientId": "<Entra app (public client) ID>",
+  "auth": {
+    "flow": "interactive"
+  },
+  "publisherPrefix": "dwmcp",
+  "defaultEnvironment": "dev",
+  "environments": {
+    "dev": {
+      "url": "https://covfs-dev.crm3.dynamics.com",
+      "readOnly": false,
+      "solution": "dwmcp"
+    }
+  },
+  "limits": {
+    "maxRows": 200
+  }
+}
