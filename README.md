@@ -3,7 +3,7 @@
 Dynamics 365 / Power Platform 개발자용 로컬 MCP 서버 — 엔터티·폼·뷰 커스터마이즈, PCF, Power Automate, Power Pages(보안·접근성 점검 포함).
 
 - 설계서: [DESIGN.md](DESIGN.md)
-- 상태: 0단계(기반) + 1단계(엔터티·컬럼·관계·선택 항목·대체 키) + 2단계(폼·뷰·웹 리소스) + 3단계(Power Pages·보안 감사) + 4단계(PCF) + 5단계(Power Automate) 구현 완료 — 실제 환경 연결 테스트 전
+- 상태: 0단계(기반) + 1단계(엔터티·컬럼·관계·선택 항목·대체 키) + 2단계(폼·뷰·웹 리소스) + 3단계(Power Pages·보안 감사) + 4단계(PCF) + 5단계(Power Automate) + 6단계(접근성·라이브 보안 점검) 구현 완료 — Dataverse 연결 테스트 전
 
 ## 설치
 
@@ -90,6 +90,10 @@ Claude Desktop (`claude_desktop_config.json`):
 | `flow_update_plan` | 정의·연결·이름 변경 — 액션 단위 추가/삭제/변경 표시, 켜진 흐름은 끄고 수정 후 다시 켬 |
 | `flow_set_state_plan` | 흐름 켜기/끄기 (연결 없는 연결 참조가 있으면 켜기 거부) |
 | `flow_runs` | 최근 실행 이력 (환경에 Dataverse 실행 기록이 있을 때) |
+
+| `a11y_scan` | 공개 페이지 접근성 검사(axe-core, WCAG 2.x A/AA) — 설치된 Edge/Chrome 헤드리스 사용, 같은 사이트 링크 크롤링 가능 → `reports/a11y-<host>-<날짜>.md` |
+| `a11y_static` | 다운로드한 Pages 템플릿 정적 접근성 검사(alt, 빈 링크/버튼, lang, tabindex, 클릭 가능한 div, placeholder만 있는 입력, 확대 금지, iframe title, 자동 재생, 헤딩 순서) |
+| `pages_security_live` | 본인 사이트 라이브 점검(읽기 전용): 보안 헤더, 쿠키 플래그, 공개/비공개, `/_services/about`, Web API 활성 테이블에 **로그인 없이** `/_api/<table>` 요청 → 데이터가 나오면 Critical. `confirmOwnSite: true` 필요 |
 
 흐름 정의는 저장 전에 검증합니다: 트리거 1개, `runAfter`가 같은 범위의 액션을 가리키는지, 순환, 잘못된 상태값, 커넥터 액션의 `operationId`, 액션이 쓰는 연결이 연결 참조에 있는지. 오류 처리(runAfter Failed)가 없으면 경고합니다. 흐름 정의 스냅샷도 `snapshot_restore_plan`으로 되돌릴 수 있습니다.
 

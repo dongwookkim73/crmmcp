@@ -420,3 +420,11 @@ export function writeAuditReport(result: AuditResult): string {
   writeFileSync(file, lines.join("\n"));
   return file;
 }
+
+/** Tables with Webapi/<table>/enabled = true in a downloaded site. */
+export function webApiTables(root: string): string[] {
+  const model = buildModel(loadYaml(root));
+  return [...model.settings]
+    .filter(([name, s]) => /^webapi\/[^/]+\/enabled$/.test(name) && truthy(s.value))
+    .map(([name]) => name.split("/")[1]);
+}
