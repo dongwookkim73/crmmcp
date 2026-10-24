@@ -128,6 +128,9 @@ export async function requireEntity(ctx: Context, logicalName: string, env?: str
   const entity = await getEntity(ctx, logicalName, env);
   if (!entity) {
     const all = await listEntities(ctx, env);
+    if (all.some((e) => e.logicalName === logicalName)) {
+      throw new Error(`Table "${logicalName}" exists but its metadata isn't readable yet (still being created or published). Try again in a minute.`);
+    }
     const near = all
       .filter((e) => e.logicalName.includes(logicalName) || logicalName.includes(e.logicalName))
       .slice(0, 5)

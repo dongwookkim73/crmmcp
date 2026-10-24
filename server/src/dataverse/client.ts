@@ -7,6 +7,7 @@ export interface RequestOptions {
   /** Adds MSCRM.SolutionUniqueName so new components land in this unmanaged solution. */
   solution?: string;
   headers?: Record<string, string>;
+  timeoutMs?: number;
 }
 
 export class DataverseError extends Error {
@@ -21,6 +22,9 @@ export class DataverseError extends Error {
 
 const MAX_RETRIES = 3;
 const TIMEOUT_MS = 30_000;
+/** Metadata changes and publishing run synchronously on the server and can take minutes (creating a table ~1-3 min). */
+const LONG_TIMEOUT_MS = 600_000;
+const LONG_RUNNING = /^(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions|PublishXml|PublishAllXml|InsertOptionValue|UpdateOptionValue|AddSolutionComponent)/;
 
 /** Thin Dataverse Web API v9.2 client: auth, retry on service-protection limits, error unwrapping. */
 export class DataverseClient {
@@ -52,7 +56,7 @@ export class DataverseClient {
         method,
         headers,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(options.timeoutMs ?? (method !== "GET" && LONG_RUNNING.test(path) ? LONG_TIMEOUT_MS : TIMEOUT_MS)),
       });
 
       if ((res.status === 429 || res.status === 503) && attempt < MAX_RETRIES) {

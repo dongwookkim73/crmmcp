@@ -130,9 +130,9 @@ function findSection(doc: Document, key: string, tabKey?: string): Element {
   return hits[0];
 }
 
-/** Controls bound to a column (body + header). */
+/** Controls bound to a column (body + header). System-generated forms may use schema-name casing (dwmcp_Name), so match case-insensitively. */
 function fieldControls(doc: Document, field: string): Element[] {
-  return all(doc, "control").filter((c) => c.getAttribute("datafieldname") === field);
+  return all(doc, "control").filter((c) => c.getAttribute("datafieldname")?.toLowerCase() === field.toLowerCase());
 }
 
 function fieldCell(doc: Document, field: string): Element {
@@ -525,7 +525,7 @@ function removeFieldEvents(doc: Document, field: string, header: boolean): void 
   if (header) return;
   const events = child(doc.documentElement!, "events");
   for (const ev of events ? children(events, "event") : []) {
-    if (ev.getAttribute("name") === "onchange" && ev.getAttribute("attribute") === field) events!.removeChild(ev);
+    if (ev.getAttribute("name") === "onchange" && ev.getAttribute("attribute")?.toLowerCase() === field.toLowerCase()) events!.removeChild(ev);
   }
 }
 
@@ -543,7 +543,7 @@ function eventHandlers(doc: Document, name: string, field: string | undefined, c
   const events = child(form, "events", create);
   if (!events) return undefined;
   let ev = children(events, "event").find(
-    (e) => e.getAttribute("name") === name && (name !== "onchange" || e.getAttribute("attribute") === field),
+    (e) => e.getAttribute("name") === name && (name !== "onchange" || e.getAttribute("attribute")?.toLowerCase() === field?.toLowerCase()),
   );
   if (!ev) {
     if (!create) return undefined;

@@ -382,6 +382,16 @@ export function registerMetaTools(server: McpServer, ctx: Context): void {
           },
           execute: async () => {
             const created = await dv.post("EntityDefinitions", body, { solution });
+            // Dataverse ignores HasNotes on create (seen on 9.2.26101); apply it with an update.
+            if (body.HasNotes) {
+              const fresh = await dv.get(`EntityDefinitions(LogicalName=${odataString(logicalName)})`);
+              if (!fresh.HasNotes) {
+                await dv.put(`EntityDefinitions(LogicalName=${odataString(logicalName)})`, { ...fresh, HasNotes: true }, {
+                  solution,
+                  headers: { "MSCRM.MergeLabels": "true" },
+                });
+              }
+            }
             const results: string[] = [];
             for (const attr of extra) {
               await dv.post(`EntityDefinitions(LogicalName=${odataString(logicalName)})/Attributes`, attr, { solution });
